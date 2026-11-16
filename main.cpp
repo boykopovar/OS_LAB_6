@@ -32,9 +32,20 @@ int Number(std::string_view text, int min, int max) {
     return value;
 }
 
+std::string Utf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int count = static_cast<int>(text.size());
+    const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), count, nullptr, 0, nullptr, nullptr);
+    if (!size) throw std::system_error(GetLastError(), std::system_category(), "WideCharToMultiByte");
+    std::string result(size, '\0');
+    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), count, result.data(), size, nullptr, nullptr))
+        throw std::system_error(GetLastError(), std::system_category(), "WideCharToMultiByte");
+    return result;
+}
+
 void Check(LSTATUS status, const char* operation, const std::wstring& object) {
     if (status == ERROR_SUCCESS) return;
-    std::wcerr << L"object=" << object << L" code=" << status << L'\n';
+    std::cerr << "object=" << Utf8(object) << " code=" << status << '\n';
     throw std::system_error(status, std::system_category(), operation);
 }
 
@@ -164,14 +175,14 @@ Changes Compare(const Snapshot& before, const Snapshot& after) {
 }
 
 void Log(const wchar_t* operation, const std::wstring& object, Clock::time_point start) {
-    std::wcout << std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count() << L" us " << operation << L" " << object << L" status=OK\n";
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count() << " us " << Utf8(operation) << " " << Utf8(object) << " status=OK\n";
 }
 
 void Print(const Changes& changes, Clock::time_point start) {
     const std::array labels{L"KEY_ADDED", L"KEY_REMOVED", L"VALUE_ADDED", L"VALUE_REMOVED", L"VALUE_CHANGED"};
     for (std::size_t i = 0; i < changes.size(); ++i) {
         for (const auto& [key, name] : changes[i]) Log(labels[i], L"key=" + key + (i >= 2 ? L" value=" + name : L""), start);
-        std::wcout << labels[i] << L" count=" << changes[i].size() << L'\n';
+        std::cout << Utf8(labels[i]) << " count=" << changes[i].size() << '\n';
     }
 }
 
@@ -253,11 +264,10 @@ int main(int argc, char** argv) try {
         for (auto& category : expected) std::sort(category.begin(), category.end());
         if (actual != expected) throw std::logic_error("Unexpected snapshot differences");
         Print(actual, start);
-        std::wcout << L"verified=" << count << L" compare_us=" << compareUs << L'\n';
+        std::cout << "verified=" << count << " compare_us=" << compareUs << '\n';
     } else throw std::invalid_argument("Invalid mode or arguments");
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
 }
-
