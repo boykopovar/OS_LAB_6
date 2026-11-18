@@ -194,8 +194,64 @@ std::wstring Root(int student, int run) {
     return L"Software\\OSiSP\\Lab06\\Student_" + std::to_wstring(student) + L"\\Run_" + std::to_wstring(run);
 }
 
+void Demo(int student, int run, int count, const std::filesystem::path& first, const std::filesystem::path& second) {
+    const auto path = Root(student, run);
+    const auto start = Clock::now();
+    if (std::filesystem::exists(first) || std::filesystem::exists(second)
+        || std::filesystem::absolute(first).lexically_normal() == std::filesystem::absolute(second).lexically_normal()) throw std::invalid_argument("Snapshot paths must be distinct new files");
+    Changes expected;
+    {
+        const Key root(HKEY_CURRENT_USER, path, true);
+        try {
+            Log(L"REG_CREATE", path, start);
+            std::mt19937 random(1000 + student * 97);
+            for (int i = 0; i < count; ++i) {
+                const auto name = std::to_wstring(i);
+                if (i % 5 == 1) {
+                    const Key child(root.Get(), name, true);
+                }
+                if (i % 5 >= 3) SetValue(root.Get(), name, random() & 65535);
+            }
+            Snapshot before;
+            Capture(root.Get(), L"", before);
+            Save(before, first);
+            Log(L"REG_SNAPSHOT", first.wstring(), start);
+            for (int i = 0; i < count; ++i) {
+                const auto name = std::to_wstring(i);
+                const auto type = i % 5;
+                expected[type].emplace_back(type < 2 ? name : L"", type < 2 ? L"" : name);
+                if (type == 0) {
+                    const Key child(root.Get(), name, true);
+                }
+                if (type == 1) Check(RegDeleteKeyW(root.Get(), name.c_str()), "RegDeleteKeyW", name);
+                if (type == 2 || type == 4) SetValue(root.Get(), name, 65536 + (random() & 65535));
+                if (type == 3) Check(RegDeleteValueW(root.Get(), name.c_str()), "RegDeleteValueW", name);
+            }
+            Log(L"REG_MUTATE", path, start);
+            Snapshot after;
+            Capture(root.Get(), L"", after);
+            Save(after, second);
+            Log(L"REG_SNAPSHOT", second.wstring(), start);
+        } catch (...) {
+            Check(RegDeleteTreeW(HKEY_CURRENT_USER, path.c_str()), "RegDeleteTreeW", path);
+            throw;
+        }
+    }
+    Check(RegDeleteTreeW(HKEY_CURRENT_USER, path.c_str()), "RegDeleteTreeW", path);
+    Log(L"REG_DELETE", path, start);
+    const auto before = Load(first);
+    const auto after = Load(second);
+    const auto comparison = Clock::now();
+    const auto actual = Compare(before, after);
+    const auto compareUs = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - comparison).count();
+    for (auto& category : expected) std::sort(category.begin(), category.end());
+    if (actual != expected) throw std::logic_error("Unexpected snapshot differences");
+    Print(actual, start);
+    std::cout << "verified=" << count << " compare_us=" << compareUs << '\n';
+}
+
 int main(int argc, char** argv) try {
-    if (argc < 2) throw std::invalid_argument("Usage: registry demo student run changes before after | save student run file | compare before after");
+    if (argc < 2) throw std::invalid_argument("Usage: registry demo student new-directory | demo student run changes before after | save student run file | compare before after");
     const std::string_view mode = argv[1];
     const auto start = Clock::now();
     if (mode == "compare" && argc == 4) {
@@ -211,60 +267,19 @@ int main(int argc, char** argv) try {
         Log(L"REG_SNAPSHOT", path, start);
     } else if (mode == "demo" && argc == 7) {
         const int student = Number(argv[2], 0, 999);
-        const auto path = Root(student, Number(argv[3], 1, 999999999));
-        const int count = Number(argv[4], 5, 10000);
-        const std::filesystem::path first = argv[5], second = argv[6];
-        if (std::filesystem::exists(first) || std::filesystem::exists(second)
-            || std::filesystem::absolute(first).lexically_normal() == std::filesystem::absolute(second).lexically_normal()) throw std::invalid_argument("Snapshot paths must be distinct new files");
-        Changes expected;
-        {
-            const Key root(HKEY_CURRENT_USER, path, true);
-            try {
-                Log(L"REG_CREATE", path, start);
-                std::mt19937 random(1000 + student * 97);
-                for (int i = 0; i < count; ++i) {
-                    const auto name = std::to_wstring(i);
-                    if (i % 5 == 1) {
-                        const Key child(root.Get(), name, true);
-                    }
-                    if (i % 5 >= 3) SetValue(root.Get(), name, random() & 65535);
-                }
-                Snapshot before;
-                Capture(root.Get(), L"", before);
-                Save(before, first);
-                Log(L"REG_SNAPSHOT", first.wstring(), start);
-                for (int i = 0; i < count; ++i) {
-                    const auto name = std::to_wstring(i);
-                    const auto type = i % 5;
-                    expected[type].emplace_back(type < 2 ? name : L"", type < 2 ? L"" : name);
-                    if (type == 0) {
-                        const Key child(root.Get(), name, true);
-                    }
-                    if (type == 1) Check(RegDeleteKeyW(root.Get(), name.c_str()), "RegDeleteKeyW", name);
-                    if (type == 2 || type == 4) SetValue(root.Get(), name, 65536 + (random() & 65535));
-                    if (type == 3) Check(RegDeleteValueW(root.Get(), name.c_str()), "RegDeleteValueW", name);
-                }
-                Log(L"REG_MUTATE", path, start);
-                Snapshot after;
-                Capture(root.Get(), L"", after);
-                Save(after, second);
-                Log(L"REG_SNAPSHOT", second.wstring(), start);
-            } catch (...) {
-                Check(RegDeleteTreeW(HKEY_CURRENT_USER, path.c_str()), "RegDeleteTreeW", path);
-                throw;
-            }
+        Demo(student, Number(argv[3], 1, 999999999), Number(argv[4], 5, 10000), argv[5], argv[6]);
+    } else if (mode == "demo" && argc == 4) {
+        const int student = Number(argv[2], 0, 999);
+        const std::filesystem::path directory = argv[3];
+        if (!std::filesystem::create_directories(directory)) {
+            throw std::invalid_argument("Choose a new demo output directory");
         }
-        Check(RegDeleteTreeW(HKEY_CURRENT_USER, path.c_str()), "RegDeleteTreeW", path);
-        Log(L"REG_DELETE", path, start);
-        const auto before = Load(first);
-        const auto after = Load(second);
-        const auto comparison = Clock::now();
-        const auto actual = Compare(before, after);
-        const auto compareUs = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - comparison).count();
-        for (auto& category : expected) std::sort(category.begin(), category.end());
-        if (actual != expected) throw std::logic_error("Unexpected snapshot differences");
-        Print(actual, start);
-        std::cout << "verified=" << count << " compare_us=" << compareUs << '\n';
+        std::mt19937 random(std::random_device{}());
+        int run = std::uniform_int_distribution<int>(100000000, 999999990)(random);
+        for (const int count : {10, 50, 100}) {
+            const auto suffix = std::to_string(count) + ".txt";
+            Demo(student, run++, count, directory / ("before-" + suffix), directory / ("after-" + suffix));
+        }
     } else throw std::invalid_argument("Invalid mode or arguments");
     return 0;
 } catch (const std::exception& error) {

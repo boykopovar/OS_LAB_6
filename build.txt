@@ -1,4 +1,4 @@
 g++ -std=c++20 -pedantic-errors -Wall -Wextra -O2 main.cpp -o registry.exe -ladvapi32
-$run = Get-Random -Minimum 100000000 -Maximum 999999990; $dir = "raw/$run"; New-Item -ItemType Directory -Force $dir
-foreach ($n in 10,50,100) { .\registry.exe demo 0 ($run++) $n "$dir/before-$n.txt" "$dir/after-$n.txt" }
-.\registry.exe compare "$dir/before-10.txt" "$dir/after-10.txt"
+registry.exe demo 0 raw/demo-standard
+registry.exe demo 17 raw/demo-017
+registry.exe compare raw/demo-standard/before-10.txt raw/demo-standard/after-10.txt
